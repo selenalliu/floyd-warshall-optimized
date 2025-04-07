@@ -1,0 +1,21 @@
+Floyd-Warshall Algorithm - Serial Implementation
+
+All times are in milliseconds
+num_vertices, time_taken
+32, 0.094601
+56, 0.464457
+96, 2.220214
+152, 8.463832
+224, 26.594181
+312, 70.699843
+416, 165.215800
+536, 349.093228
+672, 707.534283
+824, 1258.362721
+992, 2189.903624
+1176, 3653.422825
+1376, 5866.656131
+1592, 9087.793779
+1824, 13703.867424
+
+Initial delay was calculating: 1.00571
