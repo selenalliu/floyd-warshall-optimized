@@ -141,6 +141,7 @@ void floyd_warshall_serial(int **graph, int num_vertices) {
 // Randomly generate edges with weights between 1 and 10
 // Set the diagonal to 0 and non-edges to a large value (infinity)
 int **create_adjacency_matrix(int num_vertices) {
+    srand(2468); // set seed for reproducibility
     int **matrix = (int **)malloc(num_vertices * sizeof(int *));
     for (int i = 0; i < num_vertices; i++) {
         matrix[i] = (int *)malloc(num_vertices * sizeof(int));
