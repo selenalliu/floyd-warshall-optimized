@@ -2,7 +2,7 @@
 EC527 Final Project
 Serial reference code of the Floyd-Warshall Algorithm
 - Finds the All-Pairs-Shortest-Paths (APSP) of a randomly generated directed, weighted graph of multiple sizes (represented by adjacency matrices)
-- Records the time (ms) taken to run the algorithm for each size
+- Records the number of cycles taken to run the algorithm for each size
 
 Time measurement code is borrowed from previous EC527 labs.
 
@@ -13,6 +13,7 @@ gcc -O0 -o fw_serial fw_serial.c -lrt
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <time.h>
 #include <math.h>
 #include <limits.h> // For INT_MAX
@@ -22,6 +23,8 @@ gcc -O0 -o fw_serial fw_serial.c -lrt
 #define C  32  /* constant term */
 
 #define NUM_TESTS 15
+
+#define CPNS 3.0
 
 #define OPTIONS 1
 
@@ -89,8 +92,7 @@ int main() {
     x = NUM_TESTS - 1;
     max_vertices = A*x*x + B*x + C;
 
-    printf("\nAll times are in milliseconds\n");
-    printf("num_vertices, time_taken\n");
+    printf("\nnum_vertices, cycles\n");
 
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
 
@@ -107,9 +109,9 @@ int main() {
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time_stop);
         
         // calculate and store the time taken
-        time_stamp[x] = interval(time_start, time_stop) * 1000; // convert to milliseconds
+        time_stamp[x] = interval(time_start, time_stop);
 
-        printf("%d, %f\n", num_vertices, time_stamp[x]);
+        printf("%d, %ld\n", num_vertices, (long int)((double)(CPNS) * 1.0e9 * time_stamp[x]));
 
         // Free the adjacency matrix memory
         free_adjacency_matrix(graph, num_vertices);
