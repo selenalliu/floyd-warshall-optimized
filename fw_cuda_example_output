@@ -1,0 +1,10 @@
+Length of the array: 1048576
+Initializing host arrays...
+... done
+
+GPU Time (w/ data transfer): 11.307072 ms
+GPU Time (kernel only): 9.556704 ms
+CPU Time: 8208.208209 ms
+
+TEST PASSED: All results fell within tolerance range.
+Maximum difference between CPU and GPU results: 0
