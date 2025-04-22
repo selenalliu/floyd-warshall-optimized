@@ -17,7 +17,7 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 #include <time.h>
 #include <math.h>
 
-#define A  32  /* coefficient of x^2 */
+#define A  32 /* coefficient of x^2 */
 #define B  32  /* coefficient of x */
 #define C  32  /* constant term */
 
@@ -25,7 +25,7 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 
 #define CPNS 3.0
 
-#define OPTIONS 7
+#define OPTIONS 8
 
 #define IDENT 0
 
@@ -50,6 +50,7 @@ void fw_loop_unroll4_lvars(int **graph, int num_vertices);
 void fw_blocked(int **graph, int num_vertices);
 void process_block(int **graph, int num_vertices, int i, int j, int k);
 void process_block_lvars(int **graph, int num_vertices, int i, int j, int k);
+void fw_blocked_unroll4(int **graph, int num_vertices);
 void process_block_unroll4(int **graph, int num_vertices, int i, int j, int k);
 
 /* =================== Time Measurement =================== */
@@ -139,6 +140,9 @@ int main() {
                 case 6: // blocked implementation
                     fw_blocked(graph, num_vertices); 
                     break;
+                case 7: // blocked implementation with unrolling by factor of 4 on inner loop
+                    fw_blocked_unroll4(graph, num_vertices); 
+                    break;
                 default:
                     break;
             }
@@ -180,7 +184,7 @@ int main() {
         }
     }
 
-    printf("\nnum_vertices, baseline, local variables, unroll 2x, unroll 4x, unroll 8x, unroll 4x with local vars, blocked \n");
+    printf("\nnum_vertices, baseline, local variables, unroll 2x, unroll 4x, unroll 8x, unroll 4x w/ local vars, blocked, blocked w/ unroll 4x \n");
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
         printf("%d", num_vertices);
         for (OPTION = 0; OPTION < OPTIONS; OPTION++) {
@@ -386,6 +390,57 @@ void process_block_lvars(int **graph, int num_vertices, int i, int j, int k) {
                 int sum = ik + graph[kk][jj];
                 if (sum < graph[ii][jj]) {
                     graph[ii][jj] = sum;
+                }
+            }
+        }
+    }
+}
+
+void fw_blocked_unroll4(int **graph, int num_vertices) {
+    int i, j, k;
+    for (k = 0; k < num_vertices; k += BLOCK_SIZE) {
+        // process the diagonal block
+        process_block_unroll4(graph, num_vertices, k, k, k);
+
+        // process row and column blocks
+        for (i = 0; i < num_vertices; i += BLOCK_SIZE) {
+            if (i != k) {
+                process_block_unroll4(graph, num_vertices, i, k, k);
+                process_block_unroll4(graph, num_vertices, k, i, k);
+            }
+        }
+
+        // process the remaining blocks
+        for (i = 0; i < num_vertices; i += BLOCK_SIZE) {
+            if (i == k) continue;
+            for (j = 0; j < num_vertices; j += BLOCK_SIZE) {
+                if (j == k) continue;
+                process_block_unroll4(graph, num_vertices, i, j, k);
+            }
+        }
+    }
+}
+
+void process_block_unroll4(int **graph, int num_vertices, int i, int j, int k) {
+    for (int kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
+        for (int ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
+            int ik = graph[ii][kk];
+            for (int jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj += 4) {
+                int sum1 = ik + graph[kk][jj];
+                int sum2 = ik + graph[kk][jj + 1];
+                int sum3 = ik + graph[kk][jj + 2];
+                int sum4 = ik + graph[kk][jj + 3];
+                if (sum1 < graph[ii][jj]) {
+                    graph[ii][jj] = sum1;
+                }
+                if (jj + 1 < num_vertices && sum2 < graph[ii][jj + 1]) {
+                    graph[ii][jj + 1] = sum2;
+                }
+                if (jj + 2 < num_vertices && sum3 < graph[ii][jj + 2]) {
+                    graph[ii][jj + 2] = sum3;
+                }
+                if (jj + 3 < num_vertices && sum4 < graph[ii][jj + 3]) {
+                    graph[ii][jj + 3] = sum4;
                 }
             }
         }
