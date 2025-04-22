@@ -23,13 +23,17 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
   if (code != cudaSuccess)
   {
     fprintf(stderr, "CUDA_SAFE_CALL: %s %s %d\n",
-                                       cudaGetErrorString(code), file, line);
+        cudaGetErrorString(code), file, line);
     if (abort) exit(code);
   }
 }
 
 void initializeArray2D(int *arr1, int *arr2, int seed);
 void host_FW(int *d, int N);
+
+// Use shared memory for d[:][k] and d[k][:]
+#define SHARED          1 
+//
 
 #define ARR_DIM         1024    // 128 x 128 array
 int N                   =       ARR_DIM; // N nodes in the graph
@@ -44,6 +48,16 @@ int N                   =       ARR_DIM; // N nodes in the graph
 
 // Access d[i][j] in a flat array
 #define IDX(i, j, N)    ((i) * (N) + (j))
+
+// Testing Variables
+#define A  8     // coefficient of x^2
+#define B  16    // coefficient of x
+#define C  32    // constant term
+
+#define NUM_TESTS  15
+#define CPNS  3.0
+#define OPTIONS  1
+
 
 /*
         The kernel updates the distance matrix d[i][j] for a fixed k.
