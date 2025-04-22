@@ -16,7 +16,6 @@ gcc -O0 -o fw_serial fw_serial.c -lrt
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
-#include <limits.h> // For INT_MAX
 
 #define A  8  /* coefficient of x^2 */
 #define B  16  /* coefficient of x */
@@ -29,6 +28,8 @@ gcc -O0 -o fw_serial fw_serial.c -lrt
 #define OPTIONS 1
 
 #define IDENT 0
+
+#define INF_EDGE (10 * num_vertices) // arbitrarily large value for infinity edges
 
 typedef int data_t;
 
@@ -155,7 +156,7 @@ int **create_adjacency_matrix(int num_vertices) {
                 if ((rand() % 100) < 70) {
                     matrix[i][j] = rand() % 10 + 1; // random weight of 1-10
                 } else {
-                    matrix[i][j] = INT_MAX; // no edge, set to "infinity"
+                    matrix[i][j] = INF_EDGE; // no edge, set to "infinity"
                 }
             }
         }
