@@ -66,30 +66,37 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
 }
 
 /* == Basic Kernel: Updates the distance matrix d[i][j] for a fixed k. == */
-__global__ void fw_kernel_basic(int *d, int k, int N) {
-        // Each thread computes a single element d[i][j] of the distance matrix
+__global__ void fw_kernel_basic(int *__restrict__d, int k, int N) {
+    // Each thread computes a single element d[i][j] of the distance matrix
 
-        /* int tx = threadIdx.x;        // Thread index in the block
-        int ty = threadIdx.y;   // Thread index in the block
-        int bx = blockIdx.x;    // Block index in the grid
-        int by = blockIdx.y;    // Block index in the grid
+    /* int tx = threadIdx.x;        // Thread index in the block
+    int ty = threadIdx.y;   // Thread index in the block
+    int bx = blockIdx.x;    // Block index in the grid
+    int by = blockIdx.y;    // Block index in the grid
 
-        int i = by * blockDim.y + ty;   // Row index
-        int j = bx * blockDim.x + tx;   // Column index */
-        int i = blockIdx.y * blockDim.y + threadIdx.y;  // Row index
-        int j = blockIdx.x * blockDim.x + threadIdx.x;  // Column index
+    int i = by * blockDim.y + ty;   // Row index
+    int j = bx * blockDim.x + tx;   // Column index */
+    int i = blockIdx.y * blockDim.y + threadIdx.y;  // Row index
+    int j = blockIdx.x * blockDim.x + threadIdx.x;  // Column index
 
-        if (i < N && j < N) {   // If within bounds of the matrix
-                // Compute new distance using the k-th node as an intermediate node
-                int dik = d[IDX(i, k, N)];      // d[i][k]
-                int dkj = d[IDX(k, j, N)];      // d[k][j]
-                int dij = d[IDX(i, j, N)];      // d[i][j]
+    if (i >= N || j >= N) return; // If out of bounds of matrix, return
+    
+    // Precompute indices for the distance matrix
+    int idx = i * N + j;
+    int dik = d[IDX(i, k, N)];      // d[i][k]
+    int dkj = d[IDX(k, j, N)];      // d[k][j]
+    int dij = d[idx];               // d[i][j]
+    int sum = dik + dkj; // Sum of distances through k
 
-                // If distance through k is shorter, update distance
-                if (dik != INF_EDGE && dkj != INF_EDGE && dik + dkj < dij) {
-                        d[IDX(i, j, N)] = dik + dkj;
-                }
-        }
+    /* int sum = dik + dkj; // Sum of distances through k
+    // single “conditional move” instead of three nested if’s:
+    // if both edges exist AND new path is shorter, pick sum; else keep old dij
+    d[idx] = (dik != INF_EDGE && dkj != INF_EDGE && sum < dij) ? sum : dij; */
+
+    // If distance through k is shorter, update distance
+    // If either dik or dkj is INF_EDGE, then sum will be > INF_EDGE
+    // Don't need to check for INF_EDGE because dij is already < INF_EDGE
+    d[idx] = (sum < dij) ? sum : dij;
 }
 
 
@@ -643,7 +650,7 @@ int **create_adjacency_matrix(int num_vertices) {
                 if ((rand() % 100) < 70) {
                     matrix[i][j] = rand() % 10 + 1; // random weight of 1-10
                 } else {
-                    matrix[i][j] = INF_EDGE; // no edge, set to "infinity" (10*num_vertices)
+                    matrix[i][j] = INF_EDGE; // no edge, set to "infinity" 
                 }
             }
         }
