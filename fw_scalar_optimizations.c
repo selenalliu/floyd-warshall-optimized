@@ -44,7 +44,6 @@ void free_adjacency_matrix(int **matrix, int num_vertices);
 void print_graph(int **graph, int num_vertices);
 void fw_serial(int **graph, int num_vertices);
 void fw_local_variables(int **graph, int num_vertices);
-void fw_conditional_move(int **graph, int num_vertices);
 void fw_loop_unroll2(int **graph, int num_vertices);
 void fw_loop_unroll4(int **graph, int num_vertices);
 void fw_loop_unroll8(int **graph, int num_vertices);
@@ -223,19 +222,6 @@ void fw_serial(int **graph, int num_vertices) {
                 if (graph[i][k] + graph[k][j] < graph[i][j]) {
                     graph[i][j] = graph[i][k] + graph[k][j];
                 }
-            }
-        }
-    }
-}
-
-void fw_conditional_move(int **graph, int num_vertices) {
-    int i, j, k, sum;
-    for (k = 0; k < num_vertices; k++) {
-        for (i = 0; i < num_vertices; i++) {
-            for (j = 0; j < num_vertices; j++) {
-                sum = graph[i][k] + graph[k][j];
-                // user ternary operator to conditionally move the value
-                graph[i][j] = (sum < graph[i][j]) ? sum : graph[i][j];
             }
         }
     }
