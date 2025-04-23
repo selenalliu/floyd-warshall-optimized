@@ -33,7 +33,7 @@ gcc -O1 -mavx2 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 
 #define IDENT 0
 
-#define INF_EDGE (10 * num_vertices) // arbitrarily large value for infinity edges
+#define INF_EDGE 999999 // arbitrarily large value for infinity edges
 
 #define BLOCK_SIZE 64
 
