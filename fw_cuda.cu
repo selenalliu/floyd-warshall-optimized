@@ -21,6 +21,8 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 #include <unistd.h>
 #include <time.h>
 #include <math.h>
+#include <cuda_runtime.h>
+
 
 /* =============== Serial Constants =============== */
 #define A  32  /* coefficient of x^2 */
@@ -35,7 +37,7 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 
 #define IDENT 0
 
-#define INF_EDGE (10 * num_vertices) // arbitrarily large value for infinity edges
+#define INF_EDGE 999999 // arbitrarily large value for infinity edges
 
 #define BLOCK_SIZE 64
 
@@ -49,7 +51,7 @@ typedef int data_t;
 #define GPU_OPTIONS 1
 
 /* =================== CUDA Function Prototypes =================== */
-void flatten_matrix(int M, int N, int 2d[M][N], int *flat);
+void flatten_matrix(int M, int N, int **matrix, int *flat);
 void host_FW(int *d, int N);
 // Assertion to check for errors
 #define CUDA_SAFE_CALL(ans) { gpuAssert((ans), (char *)__FILE__, __LINE__); }
@@ -84,7 +86,7 @@ __global__ void fw_kernel_basic(int *d, int k, int N) {
                 int dij = d[IDX(i, j, N)];      // d[i][j]
 
                 // If distance through k is shorter, update distance
-                if (dik != INF && dkj != INF && dik + dkj < dij) {
+                if (dik != INF_EDGE && dkj != INF_EDGE && dik + dkj < dij) {
                         d[IDX(i, j, N)] = dik + dkj;
                 }
         }
@@ -254,8 +256,8 @@ void fw_GPU() {
     int OPTION;
     int num_vertices, max_vertices;
     int **graph;
-    float time_stamp_GPU_data[OPTIONS][NUM_TESTS];
-    float time_stamp_GPU_calc[OPTIONS][NUM_TESTS];
+    float time_stamp_GPU_data[GPU_OPTIONS][NUM_TESTS];
+    float time_stamp_GPU_calc[GPU_OPTIONS][NUM_TESTS];
     int x;
 
     // GPU Timing Variables
@@ -271,6 +273,12 @@ void fw_GPU() {
     // Select GPU
     CUDA_SAFE_CALL(cudaSetDevice(0));
 
+    // Create CUDA events for timing
+    CUDA_SAFE_CALL(cudaEventCreate(&startData));
+    CUDA_SAFE_CALL(cudaEventCreate(&endData));
+    CUDA_SAFE_CALL(cudaEventCreate(&startFW));
+    CUDA_SAFE_CALL(cudaEventCreate(&endFW));
+
     printf("Floyd-Warshall Algorithm - GPU Implementation\n");
 
     x = NUM_TESTS - 1;
@@ -279,7 +287,7 @@ void fw_GPU() {
     for (OPTION = 0; OPTION < GPU_OPTIONS; OPTION++) {
         printf("Testing GPU option %d\n", OPTION);
         for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
-            int N = x;
+            int N = num_vertices;
 
             // Allocate GPU memory
             size_t allocSize = N*N * sizeof(int);
@@ -291,14 +299,8 @@ void fw_GPU() {
             // create the adjacency matrix
             graph = create_adjacency_matrix(num_vertices);
             // Initialize host arrays
-            flatten_matrix(x, x, graph, h_d);
-            flatten_matrix(x, x, graph, h_d_gold);
-
-            // Create CUDA events for timing
-            CUDA_SAFE_CALL(cudaEventCreate(&startData));
-            CUDA_SAFE_CALL(cudaEventCreate(&endData));
-            CUDA_SAFE_CALL(cudaEventCreate(&startFW));
-            CUDA_SAFE_CALL(cudaEventCreate(&endFW));
+            flatten_matrix(N, N, graph, h_d);
+            flatten_matrix(N, N, graph, h_d_gold);
 
             // Record start event for data transfer
             CUDA_SAFE_CALL(cudaEventRecord(startData, 0));
@@ -310,7 +312,7 @@ void fw_GPU() {
             CUDA_SAFE_CALL(cudaEventRecord(startFW, 0));
 
             switch(OPTION) {
-                case 0: // basic GPU implementation
+                case 0: { // basic GPU implementation
                     dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
                     dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
                                   (N + BLOCK_DIM - 1) / BLOCK_DIM );
@@ -321,6 +323,7 @@ void fw_GPU() {
                         CUDA_SAFE_CALL(cudaDeviceSynchronize());
                     }
                     break;
+                }
                 default:
                     break;
             }
@@ -335,21 +338,18 @@ void fw_GPU() {
             // Record end event for data transfer
             CUDA_SAFE_CALL(cudaEventRecord(endData, 0));
 
-            // Calculate and store time taken
-            time_stamp_GPU_data[OPTION][x] = elapsedGPUData;
-            time_stamp_GPU_calc[OPTION][x] = elapsedGPUFW;
-
-            // Stop and destroy timers
+            // Stop timers
             CUDA_SAFE_CALL(cudaEventSynchronize(endFW));
             CUDA_SAFE_CALL(cudaEventElapsedTime(&elapsedGPUFW, startFW, endFW));
             CUDA_SAFE_CALL(cudaEventSynchronize(endData));
             CUDA_SAFE_CALL(cudaEventElapsedTime(&elapsedGPUData, startData, endData));
+
             //printf("\nGPU Time (w/ data transfer): %f ms\n", elapsedGPUData);
             //printf("GPU Time (kernel only): %f ms\n", elapsedGPUFW);
-            CUDA_SAFE_CALL(cudaEventDestroy(startData));
-            CUDA_SAFE_CALL(cudaEventDestroy(endData));
-            CUDA_SAFE_CALL(cudaEventDestroy(startFW));
-            CUDA_SAFE_CALL(cudaEventDestroy(endFW));
+            // Calculate and store time taken
+            time_stamp_GPU_data[OPTION][x] = elapsedGPUData;
+            time_stamp_GPU_calc[OPTION][x] = elapsedGPUFW;
+
 
             // Verify GPU results
             host_FW(h_d_gold, N);
@@ -371,28 +371,31 @@ void fw_GPU() {
             CUDA_SAFE_CALL(cudaFree(d_d));
             free(h_d);
             free(h_d_gold);
-
+            free_adjacency_matrix(graph, num_vertices);
 
             printf("  iter %d done\r", x); fflush(stdout);
-
-            // Free the adjacency matrix memory
-            free_adjacency_matrix(graph, num_vertices);
         }
     }
 
     printf("\nGPU Time (ms):\nnum_vertices, GPU basic\n");
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
         printf("%d", num_vertices);
-        for (OPTION = 0; OPTION < OPTIONS; OPTION++) {
+        for (OPTION = 0; OPTION < GPU_OPTIONS; OPTION++) {
             printf(", %f/%f", time_stamp_GPU_data[OPTION][x], time_stamp_GPU_calc[OPTION][x]);
         }
         printf("\n");
     }
+
+    // Destroy CUDA timers
+    CUDA_SAFE_CALL(cudaEventDestroy(startData));
+    CUDA_SAFE_CALL(cudaEventDestroy(endData));
+    CUDA_SAFE_CALL(cudaEventDestroy(startFW));
+    CUDA_SAFE_CALL(cudaEventDestroy(endFW));
 }
 
 int main() {
 
-    fw_CPU();
+    //fw_CPU();
     fw_GPU();
 
     return 0;
@@ -400,11 +403,11 @@ int main() {
 
 
 /* =================== CUDA Function Definitions =================== */
-void flatten_matrix(int M, int N, int 2d[M][N], int *flat) {
+void flatten_matrix(int M, int N, int **matrix, int *flat) {
         int i, j;
         for (i = 0; i < M; i++) {
                 for (j = 0; j < N; j++) {
-                        flat[i * N + j] = 2d[i][j];
+                        flat[i * N + j] = matrix[i][j];
                 }
         }
 }
@@ -412,19 +415,19 @@ void flatten_matrix(int M, int N, int 2d[M][N], int *flat) {
 void host_FW(int *d, int N) {
     // Host implementation of Floyd-Warshall algorithm
     for (int k = 0; k < N; k++) {
-            for (int i = 0; i < N; i++) {
-                    for (int j = 0; j < N; j++) {
-                            if (d[IDX(i, k, N)] != INF && d[IDX(k, j, N)] != INF) {
-                                    int dik = d[IDX(i, k, N)];      // d[i][k]
-                                    int dkj = d[IDX(k, j, N)];      // d[k][j]
-                                    int dij = d[IDX(i, j, N)];      // d[i][j]
+        for (int i = 0; i < N; i++) {
+            for (int j = 0; j < N; j++) {
+                if (d[IDX(i, k, N)] != INF_EDGE && d[IDX(k, j, N)] != INF_EDGE) {
+                    int dik = d[IDX(i, k, N)];      // d[i][k]
+                    int dkj = d[IDX(k, j, N)];      // d[k][j]
+                    int dij = d[IDX(i, j, N)];      // d[i][j]
 
-                                    if (dik + dkj < dij) {
-                                            d[IDX(i, j, N)] = dik + dkj;        // Update distance
-                                    }
-                            }
+                    if (dik + dkj < dij) {
+                        d[IDX(i, j, N)] = dik + dkj;        // Update distance
                     }
+                }
             }
+        }
     }
 }
 
