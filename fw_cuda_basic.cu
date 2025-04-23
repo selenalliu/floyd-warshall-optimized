@@ -98,7 +98,7 @@ int main (int argc, char **argv) {
         CUDA_SAFE_CALL(cudaSetDevice(0));
 
         // Allocate GPU memory
-        size_t allocSize = N * sizeof(int);
+        size_t allocSize = N*N * sizeof(int);
         CUDA_SAFE_CALL(cudaMalloc((void**)&d_d, allocSize));
 
         // Allocate host memory
@@ -106,9 +106,9 @@ int main (int argc, char **argv) {
         h_d_gold = (int *)malloc(allocSize);
 
         // Initialize host arrays
-        printf("Initializing host arrays...\n");
+        printf("Initializing host arrays...");
         // Arrays are initialized with a known seed for reproducibility
-        initializeArray2D(h_d, h_d_gold, 0x12345678);
+        initializeArray2D(h_d, h_d_gold, N, 0x12345678);
         printf("... done\n");
 
         // Create CUDA events for timing
@@ -138,27 +138,6 @@ int main (int argc, char **argv) {
                 CUDA_SAFE_CALL(cudaDeviceSynchronize());
         }
 
-        // Record end event for Floyd-Warshall kernel
-        CUDA_SAFE_CALL(cudaDeviceSynchronize());
-        CUDA_SAFE_CALL(cudaEventRecord(endFW, 0));
-
-        // Transfer results back to host
-        CUDA_SAFE_CALL(cudaMemcpy(h_d, d_d, allocSize, cudaMemcpyDeviceToHost));
-
-        // Record end event for data transfer
-        CUDA_SAFE_CALL(cudaEventRecord(endData, 0));
-
-        // Stop and destroy timers
-        CUDA_SAFE_CALL(cudaEventSynchronize(endFW));
-        CUDA_SAFE_CALL(cudaEventElapsedTime(&elapsedGPUFW, startFW, endFW));
-        CUDA_SAFE_CALL(cudaEventSynchronize(endData));
-        CUDA_SAFE_CALL(cudaEventElapsedTime(&elapsedGPUData, startData, endData));
-        printf("\nGPU Time (w/ data transfer): %f ms\n", elapsedGPUData);
-        printf("GPU Time (kernel only): %f ms\n", elapsedGPUFW);
-        CUDA_SAFE_CALL(cudaEventDestroy(startData));
-        CUDA_SAFE_CALL(cudaEventDestroy(endData));
-        CUDA_SAFE_CALL(cudaEventDestroy(startFW));
-        CUDA_SAFE_CALL(cudaEventDestroy(endFW));
 
 
         // Compute results on host for validation
@@ -188,7 +167,7 @@ int main (int argc, char **argv) {
         int errCount = 0;
         int max_diff = 0;
 
-        for (int i = 0; i < ARR_LEN; i++) {
+        for (int i = 0; i < N; i++) {
                 float diff = abs(h_d[i] - h_d_gold[i]);
                 if (diff > 1) {
                         errCount++;
@@ -253,10 +232,11 @@ void host_FW(int *d, int N) {
                                         int dij = d[IDX(i, j, N)];      // d[i][j]
 
                                         if (dik + dkj < dij) {
-                                                dij = dik + dkj;        // Update distance
+                                                d[IDX(i, j, N)] = dik + dkj;        // Update distance
                                         }
                                 }
                         }
                 }
         }
 }
+
