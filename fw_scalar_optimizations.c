@@ -7,7 +7,7 @@ Scalar optimizations for Floyd-Warshall Algorithm
 Time measurement code is borrowed from previous EC527 labs.
 
 --------------------------------------------------------------------------------
-gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations 
+gcc -O1 -mavx2 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations 
 
 */
 
@@ -17,23 +17,25 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 #include <time.h>
 #include <math.h>
 
+#include <xmmintrin.h>
+#include <smmintrin.h>
+#include <immintrin.h>
+
 #define A  32 /* coefficient of x^2 */
 #define B  32  /* coefficient of x */
 #define C  32  /* constant term */
 
-#define NUM_TESTS 8 // set to 15
+#define NUM_TESTS 8 // set to 8
 
 #define CPNS 3.0
 
-#define OPTIONS 8
+#define OPTIONS 11
 
 #define IDENT 0
 
 #define INF_EDGE (10 * num_vertices) // arbitrarily large value for infinity edges
 
 #define BLOCK_SIZE 64
-
-typedef int data_t;
 
 /* =================== Function Prototypes =================== */
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
@@ -52,6 +54,10 @@ void process_block(int **graph, int num_vertices, int i, int j, int k);
 void process_block_lvars(int **graph, int num_vertices, int i, int j, int k);
 void fw_blocked_unroll4(int **graph, int num_vertices);
 void process_block_unroll4(int **graph, int num_vertices, int i, int j, int k);
+void fw_simd_sse(int **graph, int num_vertices);
+void fw_simd_avx(int **graph, int num_vertices);
+void fw_blocked_unroll4_avx(int **graph, int num_vertices);
+void process_block_unroll4_avx(int **graph, int num_vertices, int i, int j, int k);
 
 /* =================== Time Measurement =================== */
 
@@ -143,6 +149,15 @@ int main() {
                 case 7: // blocked implementation with unrolling by factor of 4 on inner loop
                     fw_blocked_unroll4(graph, num_vertices); 
                     break;
+                case 8: // SIMD implementation w/ SSE intrinsics
+                    fw_simd_sse(graph, num_vertices);
+                    break;
+                case 9: // SIMD implementation w/ AVX intrinsics
+                    fw_simd_avx(graph, num_vertices);
+                    break;
+                case 10: // blocked implementation with unrolling by factor of 4 on inner loop using AVX intrinsics
+                    fw_blocked_unroll4_avx(graph, num_vertices); 
+                    break;
                 default:
                     break;
             }
@@ -179,12 +194,12 @@ int main() {
 
             printf("  iter %d done\r", x); fflush(stdout);
 
-            // Free the adjacency matrix memory
+            // free the adjacency matrix memory
             free_adjacency_matrix(graph, num_vertices);
         }
     }
 
-    printf("\nnum_vertices, baseline, local variables, unroll 2x, unroll 4x, unroll 8x, unroll 4x w/ local vars, blocked, blocked w/ unroll 4x \n");
+    printf("\nnum_vertices, baseline, local variables, unroll 2x, unroll 4x, unroll 8x, unroll 4x w/ local vars, blocked, blocked w/ unroll 4x, SIMD w/ SSE, SIMD w/ AVX2, blocked w/ unroll 4x & AVX2 \n");
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
         printf("%d", num_vertices);
         for (OPTION = 0; OPTION < OPTIONS; OPTION++) {
@@ -195,7 +210,6 @@ int main() {
 
     printf("\n");
     printf("Initial delay was calculating: %g \n", wd); 
-
 
     return 0;
 }
@@ -442,6 +456,105 @@ void process_block_unroll4(int **graph, int num_vertices, int i, int j, int k) {
                 if (jj + 3 < num_vertices && sum4 < graph[ii][jj + 3]) {
                     graph[ii][jj + 3] = sum4;
                 }
+            }
+        }
+    }
+}
+
+void fw_simd_sse(int **graph, int num_vertices) {
+    // using SSE intrinsics for SIMD operations
+    int i, j, k;
+    for (k = 0; k < num_vertices; k++) {
+        for (i = 0; i < num_vertices; i++) {
+            __m128i ik = _mm_set1_epi32(graph[i][k]);
+            for (j = 0; j < num_vertices; j += 4) {
+                __m128i ij = _mm_loadu_si128((__m128i *)&graph[i][j]);
+                __m128i kj = _mm_loadu_si128((__m128i *)&graph[k][j]);
+                __m128i sum = _mm_add_epi32(ik, kj);
+                __m128i mask = _mm_cmpgt_epi32(ij, sum); // see is ij > sum, set mask = 1 if true
+                __m128i result = _mm_or_si128(_mm_and_si128(mask, sum), _mm_andnot_si128(mask, ij)); // select between sum and ij based on mask
+                _mm_storeu_si128((__m128i *)&graph[i][j], result);
+            }
+        }
+    }
+}
+
+void fw_simd_avx(int **graph, int num_vertices) {
+    // using AVX2 intrinsics for SIMD operations
+    int i, j, k;
+    for (k = 0; k < num_vertices; k++) {
+        for (i = 0; i < num_vertices; i++) {
+            __m256i ik = _mm256_set1_epi32(graph[i][k]);
+            for (j = 0; j < num_vertices; j += 8) {
+                __m256i ij = _mm256_loadu_si256((__m256i *)&graph[i][j]);
+                __m256i kj = _mm256_loadu_si256((__m256i *)&graph[k][j]);
+                __m256i sum = _mm256_add_epi32(ik, kj);
+                __m256i mask = _mm256_cmpgt_epi32(ij, sum);
+                __m256i result = _mm256_or_si256(_mm256_and_si256(mask, sum), _mm256_andnot_si256(mask, ij)); // select between sum and ij based on mask
+                _mm256_storeu_si256((__m256i *)&graph[i][j], result);}
+        }
+    }
+}
+
+void fw_blocked_unroll4_avx(int **graph, int num_vertices) {
+    int i, j, k;
+    for (k = 0; k < num_vertices; k += BLOCK_SIZE) {
+        // process the diagonal block
+        process_block_unroll4_avx(graph, num_vertices, k, k, k);
+
+        // process row and column blocks
+        for (i = 0; i < num_vertices; i += BLOCK_SIZE) {
+            if (i != k) {
+                process_block_unroll4_avx(graph, num_vertices, i, k, k);
+                process_block_unroll4_avx(graph, num_vertices, k, i, k);
+            }
+        }
+
+        // process the remaining blocks
+        for (i = 0; i < num_vertices; i += BLOCK_SIZE) {
+            if (i == k) continue;
+            for (j = 0; j < num_vertices; j += BLOCK_SIZE) {
+                if (j == k) continue;
+                process_block_unroll4_avx(graph, num_vertices, i, j, k);
+            }
+        }
+    }
+}
+
+void process_block_unroll4_avx(int **graph, int num_vertices, int i, int j, int k) {
+    for (int kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
+        for (int ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
+            __m256i ik = _mm256_set1_epi32(graph[ii][kk]);
+            for (int jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj+= 32) {
+                __m256i ij1 = _mm256_loadu_si256((__m256i *)&graph[ii][jj]);
+                __m256i kj1 = _mm256_loadu_si256((__m256i *)&graph[kk][jj]);
+                __m256i ij2 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 8]);
+                __m256i kj2 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 8]);
+                __m256i ij3 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 16]);
+                __m256i kj3 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 16]);
+                __m256i ij4 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 24]);    
+                __m256i kj4 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 24]);
+
+
+                __m256i sum1 = _mm256_add_epi32(ik, kj1);
+                __m256i sum2 = _mm256_add_epi32(ik, kj2);
+                __m256i sum3 = _mm256_add_epi32(ik, kj3);
+                __m256i sum4 = _mm256_add_epi32(ik, kj4);
+
+                __m256i mask1 = _mm256_cmpgt_epi32(ij1, sum1);
+                __m256i mask2 = _mm256_cmpgt_epi32(ij2, sum2);
+                __m256i mask3 = _mm256_cmpgt_epi32(ij3, sum3);
+                __m256i mask4 = _mm256_cmpgt_epi32(ij4, sum4);
+
+                __m256i result1 = _mm256_or_si256(_mm256_and_si256(mask1, sum1),_mm256_andnot_si256(mask1, ij1)); // select between sum and ij based on mask
+                __m256i result2 = _mm256_or_si256(_mm256_and_si256(mask2, sum2), _mm256_andnot_si256(mask2, ij2)); // select between sum and ij based on mask
+                __m256i result3 = _mm256_or_si256(_mm256_and_si256(mask3, sum3), _mm256_andnot_si256(mask3, ij3)); // select between sum and ij based on mask 
+                __m256i result4 = _mm256_or_si256(_mm256_and_si256(mask4, sum4), _mm256_andnot_si256(mask4, ij4)); // select between sum and ij based on mask
+                
+                _mm256_storeu_si256((__m256i *)&graph[ii][jj], result1);
+                _mm256_storeu_si256((__m256i *)&graph[ii][jj + 8], result2);
+                _mm256_storeu_si256((__m256i *)&graph[ii][jj + 16], result3);
+                _mm256_storeu_si256((__m256i *)&graph[ii][jj + 24], result4);
             }
         }
     }
