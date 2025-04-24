@@ -31,7 +31,7 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 #define B  32  /* coefficient of x */
 #define C  32  /* constant term */
 
-#define NUM_TESTS 2 // set to 15
+#define NUM_TESTS 8 // set to 15
 
 #define CPNS 3.0
 
@@ -50,7 +50,7 @@ typedef int data_t;
 
 #define IDX(i, j, N)    ((i) * (N) + (j))
 
-#define GPU_OPTIONS 1
+#define GPU_OPTIONS 2
 
 /* =================== CUDA Function Prototypes =================== */
 void flatten_matrix(int M, int N, int **matrix, int *flat);
@@ -123,9 +123,9 @@ __global__ void fw_kernel_blocked_allinone(int *__restrict__ d, int k, int N) {
     // Loop over pivot block steps
     for (int kb = 0; kb < N; kb += BLOCK_DIM) {
         
-        // Global row and column
-        int global_i = kb + ti;
-        int global_j = kb + tj;
+        // Global row and column for pivot block
+        int pivot_global_i = kb + ti;
+        int pivot_global_j = kb + tj;
 
         // ---------- Phase 1: Process diagonal (K) tile ----------
         // Load top left pivot tile into shared
@@ -133,77 +133,107 @@ __global__ void fw_kernel_blocked_allinone(int *__restrict__ d, int k, int N) {
 
         if (bi == pivot_block && bj == pivot_block) {
             // kb = first element of the pivot block
-            tileK[ti][tj] = d[global_i * N + global_j];
+            tileK[ti][tj] = d[pivot_global_i * N + pivot_global_j];
         }
         __syncthreads();
 
         // FW on pivot tile, using pivots kb + k2
         if (bi == pivot_block && bj == pivot_block) {
             for (int k2 = 0; k2 < BLOCK_DIM; k2++) {
-                // dist through k = d[i][k] + d[k][j]
-                int v = tileK[ti][k2] + tileK[k2][tj];
-                //tileK[ti][tj] = v ^ ((k_ij ^ v) & -(k_ij < v));   // min
-                tileK[ti][tj] = (v < tileK[ti][tj]) ? v : tileK[ti][tj];
+                int via = tileK[ti][k2] + tileK[k2][tj];      // dist through k = d[i][k] + d[k][j]
+                //tileK[ti][tj] = v ^ ((tileK[ti][tj] ^ v) & -(tileK[ti][tj] < v));   // min
+                tileK[ti][tj] = (via < tileK[ti][tj]) ? via : tileK[ti][tj];
                 __syncthreads();
             }
             // Write back updated pivot
-            d[global_i * N + global_j] = tileK[ti][tj];
+            d[pivot_global_i * N + pivot_global_j] = tileK[ti][tj];
         }
         __syncthreads();
 
-        /*
-        // ----- Phase 2: Process row and column (I, J) tiles -----
-        // Load pivot row tileJ
-        if (bj == kb / BLOCK_DIM && bi != bj) {
-            tileJ[ti][tj] = d[row * BLOCK_DIM + col];
-        }
-        __syncthreads();
-        // Load pivot col tileI
-        if (bi == kb / BLOCK_DIM && bi != bj) {
-            tileI[ti][tj] = d[row * BLOCK_DIM + col];
+        // Load updated pivot tile into shared
+        {
+            tileK[ti][tj] = d[pivot_global_i * N + pivot_global_j];
         }
         __syncthreads();
 
+
+        // Global row and column for row blocks
+        int row_global_i = kb + ti;
+        int row_global_j = bj * BLOCK_DIM + tj;
+        // Global row and column for col blocks
+        int col_global_i = bi * BLOCK_DIM + ti;
+        int col_global_j = kb + tj;
+
+        // ----- Phase 2: Process row (I) and column (J) tiles -----
+        // Load pivot row tileI
+        if (bi == pivot_block && bj != pivot_block) {
+            tileI[ti][tj] = d[row_global_i * N + row_global_j];
+        }
+        __syncthreads();
+        // Load pivot col tileJ
+        if (bj == pivot_block && bi != pivot_block) {
+            tileJ[ti][tj] = d[col_global_i * N + col_global_j];
+        }
+        __syncthreads();
+        
         // Update row blocks using tileK and tileI
-        if (bi == kb / BLOCK_DIM && bj != kb / BLOCK_DIM) {
+        if (bi == pivot_block && bj != pivot_block) {
             // FW on tileI (col tile), using pivots kb + k2
-            for (int k2 = 0; k2 < BLOCK_DIM; ++k2) {
+            for (int k2 = 0; k2 < BLOCK_DIM; k2++) {
                 // dist through k = d[i][k] + d[k][j]
                 int v = tileK[ti][k2] + tileI[k2][tj];  
-                tileI[ti][tj] = v ^ ((tileI[ti][tj] ^ v) & -(tileI[ti][tj] < v));   // min
+                tileI[ti][tj] = (v < tileI[ti][tj]) ? v : tileI[ti][tj];   // min
                 __syncthreads();
             }
             // Write back updated row
-            d[row * BLOCK_DIM + col] = tileI[ti][tj];
+            d[row_global_i * N + row_global_j] = tileI[ti][tj];
         }
         __syncthreads();
         // Update col blocks using tileK and tileJ
-        if (bj == kb / BLOCK_DIM && bi != kb / BLOCK_DIM) {
+        if (bi != pivot_block && bj == pivot_block) {
             // FW on tileJ (row tile), using pivots kb + k2
-            for (int k2 = 0; k2 < BLOCK_DIM; ++k2) {
+            for (int k2 = 0; k2 < BLOCK_DIM; k2++) {
                 // dist through k = d[i][k] + d[k][j]
                 int v = tileK[k2][tj] + tileJ[ti][k2];
-                tileJ[ti][tj] = v ^ ((tileJ[ti][tj] ^ v) & -(tileJ[ti][tj] < v));   // min
+                tileJ[ti][tj] = (v < tileJ[ti][tj]) ? v : tileJ[ti][tj];   // min
                 __syncthreads();
             }
             // Write back updated col
-            d[row * BLOCK_DIM + col] = tileJ[ti][tj];
+            d[col_global_i * N + col_global_j] = tileJ[ti][tj];
+        } 
+        __syncthreads();
+        
+        // Load updated pivot row/col tiles into shared in phase 3
+
+
+        // Global row and column for remaining blocks
+        int rem_global_i = bi * BLOCK_DIM + ti;
+        int rem_global_j = bj * BLOCK_DIM + tj;
+
+        // ---------- Phase 3: Process remaining off-diagonal tiles ----------
+        if (bi != pivot_block && bj != pivot_block) {
+            // Load updated tileI and tileJ into shared memory
+            tileI[ti][tj] = d[row_global_i * N + row_global_j]; // row tile
+            tileJ[ti][tj] = d[col_global_i * N + col_global_j]; // col tile
+        }
+
+        // Read current distance into reg
+        int myVal = d[rem_global_i * N + rem_global_j]; // current distance
+        __syncthreads();
+
+        if (bi != pivot_block && bj != pivot_block) {
+            // Relax against all pivots
+            for (int k2 = 0; k2 < BLOCK_DIM; k2++) {
+                //int v = tileI[ti][k2] + tileJ[k2][tj];
+                int v = tileJ[ti][k2] + tileI[k2][tj];
+                myVal = v ^ ((myVal ^ v) & -(myVal < v));   // min
+                __syncthreads();
+            }
+
+            // Write updated value back to global
+            d[rem_global_i * N + rem_global_j] = myVal;
         }
         __syncthreads();
-        */
-        
-
-        /*// ---------- Phase 3: Process remaining tiles ----------
-        // Load self tile, other tiles are already loaded
-        int myVal = d[IDX(row, col, N)];
-        for (int k2 = 0; k2 < BLOCK_DIM; ++k2) {
-            //int v = tileI[ti][k2] + tileJ[k2][tj];
-            int v = tileJ[ti][k2] + tileI[k2][tj];
-            myVal = v ^ ((myVal ^ v) & -(myVal < v));   // min
-            __syncthreads();
-        }
-        d[IDX(row, col, N)] = myVal;
-        __syncthreads(); */
     }
     __syncthreads();
 }
@@ -394,7 +424,7 @@ void fw_GPU() {
     CUDA_SAFE_CALL(cudaEventCreate(&startFW));
     CUDA_SAFE_CALL(cudaEventCreate(&endFW));
 
-    printf("Floyd-Warshall Algorithm - GPU Implementation\n");
+    printf("\n\n\nFloyd-Warshall Algorithm - GPU Implementation\n\n");
 
     x = NUM_TESTS - 1;
     max_vertices = A*x*x + B*x + C;
@@ -427,7 +457,7 @@ void fw_GPU() {
             CUDA_SAFE_CALL(cudaEventRecord(startFW, 0));
 
             switch(OPTION) {
-                case 10: { // basic GPU implementation
+                case 0: { // basic GPU implementation
                     dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
                     dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
                                   (N + BLOCK_DIM - 1) / BLOCK_DIM );
@@ -439,11 +469,11 @@ void fw_GPU() {
                     CUDA_SAFE_CALL(cudaDeviceSynchronize());
                     break;
                 }
-                case 0: {   // GPU blocked all in one
+                case 1: {   // GPU blocked all in one
                     dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
                     dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
                                   (N + BLOCK_DIM - 1) / BLOCK_DIM );
-                    printf("Launching AIO Blocked Kernel...\n");
+                    //printf("Launching AIO Blocked Kernel...\n");
                     fw_kernel_blocked_allinone<<<dimGrid, dimBlock>>>(d_d, 0, N);
                     CUDA_SAFE_CALL(cudaGetLastError());
                     CUDA_SAFE_CALL(cudaDeviceSynchronize());
@@ -479,14 +509,14 @@ void fw_GPU() {
             host_FW(h_d_gold, N);
             int errCount = 0;
             int max_diff = 0;
-            printf("GPU, CPU\n");
+            //printf("GPU, CPU\n");
             for (int i = 0; i < N*N; i++) {
                 float diff = abs(h_d[i] - h_d_gold[i]);
                 if (diff > 1) errCount++;
                 if (diff > max_diff) max_diff = diff;
                 
-                printf("(%d,%d) ", h_d[i], h_d_gold[i]);
-                if (i % N == N - 1) printf("\n");
+                //printf("(%d,%d) ", h_d[i], h_d_gold[i]);
+                //if (i % N == N - 1) printf("\n");
             }
             if (errCount > 0) {
                 printf("\n        ERROR: %d elements do not match\n", errCount);
@@ -506,7 +536,7 @@ void fw_GPU() {
         }
     }
 
-    printf("\nGPU Time (ms): Calculation Only / Incl. Data Transfers\nnum_vertices, GPU basic (calc), GPU basic (data), GPU AIO block (calc), GPU AIO block (data)\n");
+    printf("\nGPU Time (ms): Calculation Only / Incl. Data Transfers\nnum_vertices, GPU basic (kern), GPU basic (data), GPU block (kern), GPU block (data)\n");
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
         printf("%d", num_vertices);
         for (OPTION = 0; OPTION < GPU_OPTIONS; OPTION++) {
