@@ -29,7 +29,7 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 #define B  32  /* coefficient of x */
 #define C  32  /* constant term */
 
-#define NUM_TESTS 8 // set to 15
+#define NUM_TESTS 2 // set to 15
 
 #define CPNS 3.0
 
@@ -48,7 +48,7 @@ typedef int data_t;
 
 #define IDX(i, j, N)    ((i) * (N) + (j))
 
-#define GPU_OPTIONS 1
+#define GPU_OPTIONS 2
 
 /* =================== CUDA Function Prototypes =================== */
 void flatten_matrix(int M, int N, int **matrix, int *flat);
@@ -66,7 +66,7 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
 }
 
 /* == Basic Kernel: Updates the distance matrix d[i][j] for a fixed k. == */
-__global__ void fw_kernel_basic(int *__restrict__d, int k, int N) {
+__global__ void fw_kernel_basic(int *__restrict__ d, int k, int N) {
     // Each thread computes a single element d[i][j] of the distance matrix
 
     /* int tx = threadIdx.x;        // Thread index in the block
@@ -80,9 +80,10 @@ __global__ void fw_kernel_basic(int *__restrict__d, int k, int N) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;  // Column index
 
     if (i >= N || j >= N) return; // If out of bounds of matrix, return
-    
+
     // Precompute indices for the distance matrix
     int idx = i * N + j;
+
     int dik = d[IDX(i, k, N)];      // d[i][k]
     int dkj = d[IDX(k, j, N)];      // d[k][j]
     int dij = d[idx];               // d[i][j]
@@ -99,6 +100,101 @@ __global__ void fw_kernel_basic(int *__restrict__d, int k, int N) {
     d[idx] = (sum < dij) ? sum : dij;
 }
 
+/* == Blocking Kernel: 3 Phases blocking == */
+__global__ void fw_kernel_blocked_allinone(int *__restrict__ d, int k, int N) {
+    // Each thread computes a single element d[i][j] of the distance matrix
+
+    // Shared mem for pivot + row + col tiles
+    __shared__ int tileK[BLOCK_DIM][BLOCK_DIM]; // pivot tile
+    __shared__ int tileI[BLOCK_DIM][BLOCK_DIM]; // row tile
+    __shared__ int tileJ[BLOCK_DIM][BLOCK_DIM]; // col tile
+
+
+    // Block and thread coordinates
+    int bi = blockIdx.y; // Block index in the grid (row)
+    int bj = blockIdx.x; // Block index in the grid (col)
+
+    int ti = threadIdx.y; // Thread index in the block (row)
+    int tj = threadIdx.x; // Thread index in the block (col)
+
+    // Global row and column
+    int row = bj * BLOCK_DIM + tj;
+    int col = bi * BLOCK_DIM + ti;
+
+
+    // Loop over pivot block steps
+    for (int kb = 0; kb < N; kb += BLOCK_DIM) {
+
+        // ---------- Phase 1: Process diagonal (K) tile ----------
+        // Load pivot tile
+        if (bi == bj) {
+            tileK[tj][ti] = d[row * BLOCK_DIM + col];
+            //tileK[ti][tj] = d[IDX(kb + tj, kb + tj, BLOCK_DIM)];
+        }
+        __syncthreads();
+        if (bi == bj) {
+            // FW on pivot tile, using pivots kb + k2
+            for (int k2 = 0; k2 < BLOCK_DIM; ++k2) {
+                // dist through k = d[i][k] + d[k][j]
+                int v = tileK[tj][k2] + tileK[k2][ti];
+                tileK[tj][ti] = v ^ ((tileK[tj][ti] ^ v) & -(tileK[tj][ti] < v));   // min
+                __syncthreads();
+            }
+            // Write back updated pivot
+            d[row * BLOCK_DIM + col] = tileK[tj][ti];
+        }
+        __syncthreads();
+
+
+        /* // ----- Phase 2: Process row and column (I, J) tiles -----
+        // Load pivot column tileJ
+        if (bj == kb / BLOCK_DIM && bi != bj) {
+            tileJ[ti][tj] = d[IDX(row, kb + tj, N)];
+        }
+        __syncthreads();
+        // Load pivot row tileI
+        if (bi == kb / BLOCK_DIM && bi != bj) {
+            tileI[ti][tj] = d[IDX(kb + ti, col, N)];
+        }
+        __syncthreads();
+
+        // Update row blocks using tileK and tileI
+        if (bi == kb / BLOCK_DIM && bj != kb / BLOCK_DIM) {
+            for (int k2 = 0; k2 < BLOCK_DIM; ++k2) {
+                int v = tileK[k2][tj] + tileI[ti][k2];
+                tileI[ti][tj] = v ^ ((tileI[ti][tj] ^ v) & -(tileI[ti][tj] < v));   // min
+                __syncthreads();
+            }
+            // Write back updated row
+            d[IDX(row, col, N)] = tileI[ti][tj];
+        }
+        __syncthreads();
+        // Update column blocks using tileK and tileJ
+        if (bj == kb / BLOCK_DIM && bi != kb / BLOCK_DIM) {
+            for (int k2 = 0; k2 < BLOCK_DIM; ++k2) {
+                int v = tileK[ti][k2] + tileJ[k2][tj];
+                tileJ[ti][tj] = v ^ ((tileJ[ti][tj] ^ v) & -(tileJ[ti][tj] < v));   // min
+                __syncthreads();
+            }
+            // Write back updated column
+            d[IDX(row, col, N)] = tileJ[ti][tj];
+        }
+        __syncthreads();
+
+        // ---------- Phase 3: Process remaining tiles ----------
+        // Load self tile, other tiles are already loaded
+        int myVal = d[IDX(row, col, N)];
+        for (int k2 = 0; k2 < BLOCK_DIM; ++k2) {
+            //int v = tileI[ti][k2] + tileJ[k2][tj];
+            int v = tileJ[ti][k2] + tileI[k2][tj];
+            myVal = v ^ ((myVal ^ v) & -(myVal < v));   // min
+            __syncthreads();
+        }
+        d[IDX(row, col, N)] = myVal;
+        __syncthreads(); */
+    }
+    __syncthreads();
+}
 
 /* =================== Serial Function Prototypes =================== */
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
@@ -327,9 +423,17 @@ void fw_GPU() {
                         // Launch kernel for each k iteration
                         fw_kernel_basic<<<dimGrid, dimBlock>>>(d_d, k, N);
                         CUDA_SAFE_CALL(cudaGetLastError());
-                        CUDA_SAFE_CALL(cudaDeviceSynchronize());
                     }
+                    CUDA_SAFE_CALL(cudaDeviceSynchronize());
                     break;
+                }
+                case 1: {   // GPU blocked all in one
+                    dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
+                    dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
+                                  (N + BLOCK_DIM - 1) / BLOCK_DIM );
+                    fw_kernel_blocked_allinone<<<dimGrid, dimBlock>>>(d_d, 0, N);
+                    CUDA_SAFE_CALL(cudaGetLastError());
+                    CUDA_SAFE_CALL(cudaDeviceSynchronize());
                 }
                 default:
                     break;
@@ -362,17 +466,19 @@ void fw_GPU() {
             host_FW(h_d_gold, N);
             int errCount = 0;
             int max_diff = 0;
+            printf("GPU, CPU\n");
             for (int i = 0; i < N; i++) {
                 float diff = abs(h_d[i] - h_d_gold[i]);
                 if (diff > 1) errCount++;
                 if (diff > max_diff) max_diff = diff;
+                printf("%d, %d\n", h_d[i], h_d_gold[i]);
             }
             if (errCount > 0) {
-                printf("\nERROR: %d elements do not match\n", errCount);
+                printf("\n        ERROR: %d elements do not match\n", errCount);
+                printf("        Max difference between CPU and GPU results: %d\n", max_diff);
             } else {
-                printf("\nTEST PASSED: All elements match\n");
+                //printf("\nTEST PASSED: All elements match\n");
             }
-            printf("Max difference between CPU and GPU results: %d\n", max_diff);
 
             // Free device and host memory
             CUDA_SAFE_CALL(cudaFree(d_d));
@@ -380,15 +486,16 @@ void fw_GPU() {
             free(h_d_gold);
             free_adjacency_matrix(graph, num_vertices);
 
-            printf("  iter %d done\r", x); fflush(stdout);
+            int gridDim = (N + BLOCK_DIM - 1) / BLOCK_DIM;
+            printf("  iter %d done with %dx%d grid\r", x, gridDim, gridDim); fflush(stdout);
         }
     }
 
-    printf("\nGPU Time (ms):\nnum_vertices, GPU basic\n");
+    printf("\nGPU Time (ms): Calculation Only / Incl. Data Transfers\nnum_vertices, GPU basic (calc), GPU basic (data), GPU AIO block (calc), GPU AIO block (data)\n");
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
         printf("%d", num_vertices);
         for (OPTION = 0; OPTION < GPU_OPTIONS; OPTION++) {
-            printf(", %f/%f", time_stamp_GPU_data[OPTION][x], time_stamp_GPU_calc[OPTION][x]);
+            printf(", %f, %f", time_stamp_GPU_calc[OPTION][x], time_stamp_GPU_data[OPTION][x]);
         }
         printf("\n");
     }
@@ -650,7 +757,7 @@ int **create_adjacency_matrix(int num_vertices) {
                 if ((rand() % 100) < 70) {
                     matrix[i][j] = rand() % 10 + 1; // random weight of 1-10
                 } else {
-                    matrix[i][j] = INF_EDGE; // no edge, set to "infinity" 
+                    matrix[i][j] = INF_EDGE; // no edge, set to "infinity"
                 }
             }
         }
