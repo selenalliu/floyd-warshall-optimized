@@ -27,7 +27,6 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 
 
 /* =============== Serial Constants =============== */
-// 4, 4, 4, 22 tests and 32, 32, 32, 8 tests 
 #define A  32  /* coefficient of x^2 */
 #define B  32  /* coefficient of x */
 #define C  32  /* constant term */
@@ -51,8 +50,7 @@ typedef int data_t;
 
 #define IDX(i, j, N)    ((i) * (N) + (j))
 
-#define GPU_OPTIONS 3
-#define CPU_VERIFICATION 0
+#define GPU_OPTIONS 2
 
 /* =================== CUDA Function Prototypes =================== */
 void flatten_matrix(int M, int N, int **matrix, int *flat);
@@ -69,8 +67,8 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
   }
 }
 
-/* == Naive Kernel: Updates the distance matrix d[i][j] for a fixed k. == */
-__global__ void fw_kernel_naive(int *d, int k, int N) {
+/* == Basic Kernel: Updates the distance matrix d[i][j] for a fixed k. == */
+__global__ void fw_kernel_basic(int *__restrict__ d, int k, int N) {
     // Each thread computes a single element d[i][j] of the distance matrix
 
     /* int tx = threadIdx.x;        // Thread index in the block
@@ -80,26 +78,6 @@ __global__ void fw_kernel_naive(int *d, int k, int N) {
 
     int i = by * blockDim.y + ty;   // Row index
     int j = bx * blockDim.x + tx;   // Column index */
-    int i = blockIdx.y * blockDim.y + threadIdx.y;  // Row index
-    int j = blockIdx.x * blockDim.x + threadIdx.x;  // Column index
-
-    if (i < N && j < N) {
-        // If within bounds of the matrix
-        if (d[IDX(i, k, N)] != INF_EDGE && d[IDX(k, j, N)] != INF_EDGE) {
-            // If d[i][k] and d[k][j] edges exist
-            // d[i][k] + d[k][j] < d[i][j]
-            if (d[IDX(i, k, N)] + d[IDX(k, j, N)] < d[IDX(i, j, N)]) {
-                // Update distance
-                d[IDX(i, j, N)] = d[IDX(i, k, N)] + d[IDX(k, j, N)];
-            }
-        }
-    }
-}
-
-/* == Basic Kernel: Updates the distance matrix d[i][j] for a fixed k. == */
-__global__ void fw_kernel_basic(int *__restrict__ d, int k, int N) {
-    // Each thread computes a single element d[i][j] of the distance matrix
-
     int i = blockIdx.y * blockDim.y + threadIdx.y;  // Row index
     int j = blockIdx.x * blockDim.x + threadIdx.x;  // Column index
 
@@ -479,19 +457,7 @@ void fw_GPU() {
             CUDA_SAFE_CALL(cudaEventRecord(startFW, 0));
 
             switch(OPTION) {
-				case 0: { // naive GPU implementation
-                    dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
-                    dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
-                                  (N + BLOCK_DIM - 1) / BLOCK_DIM );
-                    for (int k = 0; k < N; k++) {
-                        // Launch kernel for each k iteration
-                        fw_kernel_naive<<<dimGrid, dimBlock>>>(d_d, k, N);
-                        CUDA_SAFE_CALL(cudaGetLastError());
-                        CUDA_SAFE_CALL(cudaDeviceSynchronize());
-                    }
-                    break;
-                }
-                case 1: { // basic GPU implementation
+                case 0: { // basic GPU implementation
                     dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
                     dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
                                   (N + BLOCK_DIM - 1) / BLOCK_DIM );
@@ -503,7 +469,7 @@ void fw_GPU() {
                     CUDA_SAFE_CALL(cudaDeviceSynchronize());
                     break;
                 }
-                case 2: {   // GPU blocked all in one
+                case 1: {   // GPU blocked all in one
                     dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
                     dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
                                   (N + BLOCK_DIM - 1) / BLOCK_DIM );
@@ -540,26 +506,24 @@ void fw_GPU() {
 
 
             // Verify GPU results
-			if (CPU_VERIFICATION) {
-				host_FW(h_d_gold, N);
-				int errCount = 0;
-				int max_diff = 0;
-				//printf("GPU, CPU\n");
-				for (int i = 0; i < N*N; i++) {
-					float diff = abs(h_d[i] - h_d_gold[i]);
-					if (diff > 1) errCount++;
-					if (diff > max_diff) max_diff = diff;
-					
-					//printf("(%d,%d) ", h_d[i], h_d_gold[i]);
-					//if (i % N == N - 1) printf("\n");
-				}
-				if (errCount > 0) {
-					printf("\n        ERROR: %d elements do not match\n", errCount);
-					printf("        Max difference between CPU and GPU results: %d\n", max_diff);
-				} else {
-					//printf("\nTEST PASSED: All elements match\n");
-				}
-			}
+            host_FW(h_d_gold, N);
+            int errCount = 0;
+            int max_diff = 0;
+            //printf("GPU, CPU\n");
+            for (int i = 0; i < N*N; i++) {
+                float diff = abs(h_d[i] - h_d_gold[i]);
+                if (diff > 1) errCount++;
+                if (diff > max_diff) max_diff = diff;
+                
+                //printf("(%d,%d) ", h_d[i], h_d_gold[i]);
+                //if (i % N == N - 1) printf("\n");
+            }
+            if (errCount > 0) {
+                printf("\n        ERROR: %d elements do not match\n", errCount);
+                printf("        Max difference between CPU and GPU results: %d\n", max_diff);
+            } else {
+                //printf("\nTEST PASSED: All elements match\n");
+            }
 
             // Free device and host memory
             CUDA_SAFE_CALL(cudaFree(d_d));
@@ -591,7 +555,6 @@ void fw_GPU() {
 int main() {
 
     //fw_CPU();
-	
     fw_GPU();
 
     return 0;
