@@ -539,8 +539,9 @@ void fw_GPU() {
             time_stamp_GPU_data[OPTION][x] = elapsedGPUData;
             time_stamp_GPU_calc[OPTION][x] = elapsedGPUFW;
 
+
+            // Verify GPU results
             if (CPU_VERIFICATION) {
-                // Verify GPU results
                 host_FW(h_d_gold, N);
                 int errCount = 0;
                 int max_diff = 0;
@@ -560,7 +561,7 @@ void fw_GPU() {
                     //printf("\nTEST PASSED: All elements match\n");
                 }
             }
-            
+
             // Free device and host memory
             CUDA_SAFE_CALL(cudaFree(d_d));
             free(h_d);
