@@ -47,13 +47,12 @@ gcc -O1 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 typedef int data_t;
 
 /* ============== CUDA Constants =============== */
-#define BLOCK_DIM  8   // 32x32 threads per block
+#define BLOCK_DIM  32   // 32x32 threads per block
 
 #define IDX(i, j, N)    ((i) * (N) + (j))
 
 #define GPU_OPTIONS 3
 #define CPU_VERIFICATION 0
-// One of the smaller iterations for blocking results in errors
 
 /* =================== CUDA Function Prototypes =================== */
 void flatten_matrix(int M, int N, int **matrix, int *flat);
@@ -97,7 +96,7 @@ __global__ void fw_kernel_naive(int *d, int k, int N) {
     }
 }
 
-/* == Basic Kernel: Contains basic code optimizations. == */
+/* == Basic Kernel: Updates the distance matrix d[i][j] for a fixed k. == */
 __global__ void fw_kernel_basic(int *__restrict__ d, int k, int N) {
     // Each thread computes a single element d[i][j] of the distance matrix
 
@@ -480,7 +479,7 @@ void fw_GPU() {
             CUDA_SAFE_CALL(cudaEventRecord(startFW, 0));
 
             switch(OPTION) {
-                case 0: { // naive GPU implementation
+				case 0: { // naive GPU implementation
                     dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
                     dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
                                   (N + BLOCK_DIM - 1) / BLOCK_DIM );
@@ -492,7 +491,7 @@ void fw_GPU() {
                     }
                     break;
                 }
-                case 1: { // basic GPU implementation with optimizations
+                case 1: { // basic GPU implementation
                     dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
                     dim3 dimGrid( (N + BLOCK_DIM - 1) / BLOCK_DIM,
                                   (N + BLOCK_DIM - 1) / BLOCK_DIM );
@@ -539,28 +538,29 @@ void fw_GPU() {
             time_stamp_GPU_data[OPTION][x] = elapsedGPUData;
             time_stamp_GPU_calc[OPTION][x] = elapsedGPUFW;
 
-            if (CPU_VERIFICATION) {
-                // Verify GPU results
-                host_FW(h_d_gold, N);
-                int errCount = 0;
-                int max_diff = 0;
-                //printf("GPU, CPU\n");
-                for (int i = 0; i < N*N; i++) {
-                    float diff = abs(h_d[i] - h_d_gold[i]);
-                    if (diff > 1) errCount++;
-                    if (diff > max_diff) max_diff = diff;
-                    
-                    //printf("(%d,%d) ", h_d[i], h_d_gold[i]);
-                    //if (i % N == N - 1) printf("\n");
-                }
-                if (errCount > 0) {
-                    printf("\n        ERROR: %d elements do not match\n", errCount);
-                    printf("        Max difference between CPU and GPU results: %d\n", max_diff);
-                } else {
-                    //printf("\nTEST PASSED: All elements match\n");
-                }
-            }
-            
+
+            // Verify GPU results
+			if (CPU_VERIFICATION) {
+				host_FW(h_d_gold, N);
+				int errCount = 0;
+				int max_diff = 0;
+				//printf("GPU, CPU\n");
+				for (int i = 0; i < N*N; i++) {
+					float diff = abs(h_d[i] - h_d_gold[i]);
+					if (diff > 1) errCount++;
+					if (diff > max_diff) max_diff = diff;
+					
+					//printf("(%d,%d) ", h_d[i], h_d_gold[i]);
+					//if (i % N == N - 1) printf("\n");
+				}
+				if (errCount > 0) {
+					printf("\n        ERROR: %d elements do not match\n", errCount);
+					printf("        Max difference between CPU and GPU results: %d\n", max_diff);
+				} else {
+					//printf("\nTEST PASSED: All elements match\n");
+				}
+			}
+
             // Free device and host memory
             CUDA_SAFE_CALL(cudaFree(d_d));
             free(h_d);
@@ -572,7 +572,7 @@ void fw_GPU() {
         }
     }
 
-    printf("\nGPU Time (ms): Calculation Only / Incl. Data Transfers\nnum_vertices, GPU_naive (kern), GPU_naive (data), GPU basic (kern), GPU basic (data), GPU block (kern), GPU block (data)\n");
+    printf("\nGPU Time (ms): Calculation Only / Incl. Data Transfers\nnum_vertices, GPU basic (kern), GPU basic (data), GPU block (kern), GPU block (data)\n");
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
         printf("%d", num_vertices);
         for (OPTION = 0; OPTION < GPU_OPTIONS; OPTION++) {
@@ -591,6 +591,7 @@ void fw_GPU() {
 int main() {
 
     //fw_CPU();
+	
     fw_GPU();
 
     return 0;
