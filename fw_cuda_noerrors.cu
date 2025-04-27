@@ -876,7 +876,7 @@ void fw_GPU() {
 
             // Verify GPU results
 			if (CPU_VERIFICATION) {
-				host_FW(h_d_gold, N);
+				host_FW_unroll4(h_d_gold, N);
 				int errCount = 0;
 				int max_diff = 0;
 				//printf("GPU, CPU\n");
@@ -960,6 +960,43 @@ void host_FW(int *d, int N) {
         }
     }
 }
+
+void host_FW_unroll4(int *graph, int num_vertices) {
+	int i, j, k, ik;
+    // unroll the innermost loop by a factor of 4 with local variables
+    for (k = 0; k < num_vertices; k++) {
+        for (i = 0; i < num_vertices; i++) {
+            // index of the (i,k) element in the flattened array
+            ik = graph[i * num_vertices + k];
+            // process j in strides of 4
+            for (j = 0; j < num_vertices; j += 4) {
+                int base_ij = i * num_vertices + j;     // index of (i, j)
+                int base_kj = k * num_vertices + j;     // index of (k, j)
+
+                // compute sums
+                int sum1 = ik + graph[base_kj];
+                int sum2 = ik + graph[base_kj + 1];
+                int sum3 = ik + graph[base_kj + 2];
+                int sum4 = ik + graph[base_kj + 3];
+
+                // compare/update
+                if (sum1 < graph[base_ij]) {
+                    graph[base_ij] = sum1;
+                }
+                if (j + 1 < num_vertices && sum2 < graph[base_ij + 1]) {
+                    graph[base_ij + 1] = sum2;
+                }
+                if (j + 2 < num_vertices && sum3 < graph[base_ij + 2]) {
+                    graph[base_ij + 2] = sum3;
+                }
+                if (j + 3 < num_vertices && sum4 < graph[base_ij + 3]) {
+                    graph[base_ij + 3] = sum4;
+                }
+            }
+        }
+    }
+}
+
 
 /* =================== Serial Function Definitions =================== */
 void fw_serial(int **graph, int num_vertices) {
@@ -1079,11 +1116,11 @@ void fw_loop_unroll8(int **graph, int num_vertices) {
 }
 
 void fw_loop_unroll4_lvars(int **graph, int num_vertices) {
-    int i, j, k;
+    int i, j, k, ik;
     // unroll the innermost loop by a factor of 4 with local variables
     for (k = 0; k < num_vertices; k++) {
         for (i = 0; i < num_vertices; i++) {
-            int ik = graph[i][k];
+            ik = graph[i][k];
             for (j = 0; j < num_vertices; j += 4) {
                 int sum1 = ik + graph[k][j];
                 int sum2 = ik + graph[k][j + 1];
