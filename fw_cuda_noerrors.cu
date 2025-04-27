@@ -56,6 +56,8 @@ typedef int data_t;
 /* =================== CUDA Function Prototypes =================== */
 void flatten_matrix(int M, int N, int **matrix, int *flat);
 void host_FW(int *d, int N);
+void host_FW_unroll4(int *graph, int num_vertices);
+
 // Assertion to check for errors
 #define CUDA_SAFE_CALL(ans) { gpuAssert((ans), (char *)__FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
