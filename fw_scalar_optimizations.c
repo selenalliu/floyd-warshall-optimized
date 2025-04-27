@@ -21,15 +21,15 @@ gcc -O1 -mavx2 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations
 #include <smmintrin.h>
 #include <immintrin.h>
 
-#define A  32 /* coefficient of x^2 */
-#define B  32  /* coefficient of x */
-#define C  32  /* constant term */
+#define A  64 /* coefficient of x^2 */
+#define B  64  /* coefficient of x */
+#define C  64  /* constant term */
 
-#define NUM_TESTS 8 // set to 8
+#define NUM_TESTS 5// set to 8
 
 #define CPNS 3.0
 
-#define OPTIONS 11
+#define OPTIONS 10
 
 #define IDENT 0
 
@@ -47,7 +47,6 @@ void fw_local_variables(int **graph, int num_vertices);
 void fw_loop_unroll2(int **graph, int num_vertices);
 void fw_loop_unroll4(int **graph, int num_vertices);
 void fw_loop_unroll8(int **graph, int num_vertices);
-void fw_loop_unroll4_lvars(int **graph, int num_vertices);
 void fw_blocked(int **graph, int num_vertices);
 void process_block(int **graph, int num_vertices, int i, int j, int k);
 void process_block_lvars(int **graph, int num_vertices, int i, int j, int k);
@@ -139,22 +138,22 @@ int main() {
                 case 4: // unrolled implementation by factor of 8
                     fw_loop_unroll8(graph, num_vertices);
                     break;
-                case 5: // unrolled implementation by factor of 4 with local variables
-                    fw_loop_unroll4_lvars(graph, num_vertices); 
-                    break;
-                case 6: // blocked implementation
+                // case 5: // unrolled implementation by factor of 4 with local variables
+                //     // fw_loop_unroll4_lvars(graph, num_vertices); 
+                //     break;
+                case 5: // blocked implementation
                     fw_blocked(graph, num_vertices); 
                     break;
-                case 7: // blocked implementation with unrolling by factor of 4 on inner loop
+                case 6: // blocked implementation with unrolling by factor of 4 on inner loop
                     fw_blocked_unroll4(graph, num_vertices); 
                     break;
-                case 8: // SIMD implementation w/ SSE intrinsics
+                case 7: // SIMD implementation w/ SSE intrinsics
                     fw_simd_sse(graph, num_vertices);
                     break;
-                case 9: // SIMD implementation w/ AVX intrinsics
+                case 8: // SIMD implementation w/ AVX intrinsics
                     fw_simd_avx(graph, num_vertices);
                     break;
-                case 10: // blocked implementation with unrolling by factor of 4 on inner loop using AVX intrinsics
+                case 9: // blocked implementation with unrolling by factor of 4 on inner loop using AVX intrinsics
                     fw_blocked_unroll4_avx(graph, num_vertices); 
                     break;
                 default:
@@ -207,6 +206,15 @@ int main() {
         printf("\n");
     }
 
+    for (x = 0; x < NUM_TESTS; x++) {
+        if (ref_graph[x] != NULL) {
+            for (int i = 0; i < A*x*x + B*x + C; i++) {
+                free(ref_graph[x][i]);
+            }
+            free(ref_graph[x]);
+        }
+    }    
+
     printf("\n");
     printf("Initial delay was calculating: %g \n", wd); 
 
@@ -247,12 +255,15 @@ void fw_loop_unroll2(int **graph, int num_vertices) {
     // unroll the innermost loop by a factor of 2
     for (k = 0; k < num_vertices; k++) {
         for (i = 0; i < num_vertices; i++) {
+            int ik = graph[i][k];
             for (j = 0; j < num_vertices; j += 2) {
-                if (graph[i][k] + graph[k][j] < graph[i][j]) {
-                    graph[i][j] = graph[i][k] + graph[k][j];
+                int sum1 = ik + graph[k][j];
+                int sum2 = ik + graph[k][j + 1];
+                if (sum1 < graph[i][j]) {
+                    graph[i][j] = sum1;
                 }
-                if (j + 1 < num_vertices && graph[i][k] + graph[k][j + 1] < graph[i][j + 1]) {
-                    graph[i][j + 1] = graph[i][k] + graph[k][j + 1];
+                if (j + 1 < num_vertices && sum2 < graph[i][j + 1]) {
+                    graph[i][j + 1] = sum2;
                 }
             }
         }
@@ -262,64 +273,6 @@ void fw_loop_unroll2(int **graph, int num_vertices) {
 void fw_loop_unroll4(int **graph, int num_vertices) {
     int i, j, k;
     // unroll the innermost loop by a factor of 4
-    for (k = 0; k < num_vertices; k++) {
-        for (i = 0; i < num_vertices; i++) {
-            for (j = 0; j < num_vertices; j += 4) {
-                if (graph[i][k] + graph[k][j] < graph[i][j]) {
-                    graph[i][j] = graph[i][k] + graph[k][j];
-                }
-                if (j + 1 < num_vertices && graph[i][k] + graph[k][j + 1] < graph[i][j + 1]) {
-                    graph[i][j + 1] = graph[i][k] + graph[k][j + 1];
-                }
-                if (j + 2 < num_vertices && graph[i][k] + graph[k][j + 2] < graph[i][j + 2]) {
-                    graph[i][j + 2] = graph[i][k] + graph[k][j + 2];
-                }
-                if (j + 3 < num_vertices && graph[i][k] + graph[k][j + 3] < graph[i][j + 3]) {
-                    graph[i][j + 3] = graph[i][k] + graph[k][j + 3];
-                }
-            }
-        }
-    }
-}
-
-void fw_loop_unroll8(int **graph, int num_vertices) {
-    int i, j, k;
-    // unroll the innermost loop by a factor of 8
-    for (k = 0; k < num_vertices; k++) {
-        for (i = 0; i < num_vertices; i++) {
-            for (j = 0; j < num_vertices; j += 8) {
-                if (graph[i][k] + graph[k][j] < graph[i][j]) {
-                    graph[i][j] = graph[i][k] + graph[k][j];
-                }
-                if (j + 1 < num_vertices && graph[i][k] + graph[k][j + 1] < graph[i][j + 1]) {
-                    graph[i][j + 1] = graph[i][k] + graph[k][j + 1];
-                }
-                if (j + 2 < num_vertices && graph[i][k] + graph[k][j + 2] < graph[i][j + 2]) {
-                    graph[i][j + 2] = graph[i][k] + graph[k][j + 2];
-                }
-                if (j + 3 < num_vertices && graph[i][k] + graph[k][j + 3] < graph[i][j + 3]) {
-                    graph[i][j + 3] = graph[i][k] + graph[k][j + 3];
-                }
-                if (j + 4 < num_vertices && graph[i][k] + graph[k][j + 4] < graph[i][j + 4]) {
-                    graph[i][j + 4] = graph[i][k] + graph[k][j + 4];
-                }
-                if (j + 5 < num_vertices && graph[i][k] + graph[k][j + 5] < graph[i][j + 5]) {
-                    graph[i][j + 5] = graph[i][k] + graph[k][j + 5];
-                }
-                if (j + 6 < num_vertices && graph[i][k] + graph[k][j + 6] < graph[i][j + 6]) {
-                    graph[i][j + 6] = graph[i][k] + graph[k][j + 6];
-                }
-                if (j + 7 < num_vertices && graph[i][k] + graph[k][j + 7] < graph[i][j + 7]) {
-                    graph[i][j + 7] = graph[i][k] + graph[k][j + 7];
-                }
-            }
-        }
-    }
-}
-
-void fw_loop_unroll4_lvars(int **graph, int num_vertices) {
-    int i, j, k;
-    // unroll the innermost loop by a factor of 4 with local variables
     for (k = 0; k < num_vertices; k++) {
         for (i = 0; i < num_vertices; i++) {
             int ik = graph[i][k];
@@ -345,6 +298,78 @@ void fw_loop_unroll4_lvars(int **graph, int num_vertices) {
     }
 }
 
+void fw_loop_unroll8(int **graph, int num_vertices) {
+    int i, j, k;
+    // unroll the innermost loop by a factor of 8
+    for (k = 0; k < num_vertices; k++) {
+        for (i = 0; i < num_vertices; i++) {
+            int ik = graph[i][k];
+            for (j = 0; j < num_vertices; j += 8) {
+                int sum1 = ik + graph[k][j];
+                int sum2 = ik + graph[k][j + 1];
+                int sum3 = ik + graph[k][j + 2];
+                int sum4 = ik + graph[k][j + 3];
+                int sum5 = ik + graph[k][j + 4];
+                int sum6 = ik + graph[k][j + 5];
+                int sum7 = ik + graph[k][j + 6];
+                int sum8 = ik + graph[k][j + 7];
+                if (sum1 < graph[i][j]) {
+                    graph[i][j] = sum1;
+                }
+                if (j + 1 < num_vertices && sum2 < graph[i][j + 1]) {
+                    graph[i][j + 1] = sum2;
+                }
+                if (j + 2 < num_vertices && sum3 < graph[i][j + 2]) {
+                    graph[i][j + 2] = sum3;
+                }
+                if (j + 3 < num_vertices && sum4 < graph[i][j + 3]) {
+                    graph[i][j + 3] = sum4;
+                }
+                if (j + 4 < num_vertices && sum5 < graph[i][j + 4]) {
+                    graph[i][j + 4] = sum5;
+                }
+                if (j + 5 < num_vertices && sum6 < graph[i][j + 5]) {
+                    graph[i][j + 5] = sum6;
+                }
+                if (j + 6 < num_vertices && sum7 < graph[i][j + 6]) {
+                    graph[i][j + 6] = sum7;
+                }
+                if (j + 7 < num_vertices && sum8 < graph[i][j + 7]) {
+                    graph[i][j + 7] = sum8;
+                }
+            }
+        }
+    }
+}
+
+// void fw_loop_unroll4_lvars(int **graph, int num_vertices) {
+//     int i, j, k;
+//     // unroll the innermost loop by a factor of 4 with local variables
+//     for (k = 0; k < num_vertices; k++) {
+//         for (i = 0; i < num_vertices; i++) {
+//             int ik = graph[i][k];
+//             for (j = 0; j < num_vertices; j += 4) {
+//                 int sum1 = ik + graph[k][j];
+//                 int sum2 = ik + graph[k][j + 1];
+//                 int sum3 = ik + graph[k][j + 2];
+//                 int sum4 = ik + graph[k][j + 3];
+//                 if (sum1 < graph[i][j]) {
+//                     graph[i][j] = sum1;
+//                 }
+//                 if (j + 1 < num_vertices && sum2 < graph[i][j + 1]) {
+//                     graph[i][j + 1] = sum2;
+//                 }
+//                 if (j + 2 < num_vertices && sum3 < graph[i][j + 2]) {
+//                     graph[i][j + 2] = sum3;
+//                 }
+//                 if (j + 3 < num_vertices && sum4 < graph[i][j + 3]) {
+//                     graph[i][j + 3] = sum4;
+//                 }
+//             }
+//         }
+//     }
+// }
+
 void fw_blocked(int **graph, int num_vertices) {
     int i, j, k;
     for (k = 0; k < num_vertices; k += BLOCK_SIZE) {
@@ -355,7 +380,12 @@ void fw_blocked(int **graph, int num_vertices) {
         for (i = 0; i < num_vertices; i += BLOCK_SIZE) {
             if (i != k) {
                 process_block_lvars(graph, num_vertices, i, k, k);
-                process_block_lvars(graph, num_vertices, k, i, k);
+            }
+        }
+
+        for (j = 0; j < num_vertices; j += BLOCK_SIZE) {
+            if (j != k) {
+                process_block_lvars(graph, num_vertices, k, j, k);
             }
         }
 
@@ -370,23 +400,24 @@ void fw_blocked(int **graph, int num_vertices) {
     }
 }
 
-void process_block(int **graph, int num_vertices, int i, int j, int k) {
-    for (int kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
-        for (int ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
-            for (int jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj++) {
-                if (graph[ii][kk] + graph[kk][jj] < graph[ii][jj]) {
-                    graph[ii][jj] = graph[ii][kk] + graph[kk][jj];
-                }
-            }
-        }
-    }
-}
+// void process_block(int **graph, int num_vertices, int i, int j, int k) {
+//     for (int kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
+//         for (int ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
+//             for (int jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj++) {
+//                 if (graph[ii][kk] + graph[kk][jj] < graph[ii][jj]) {
+//                     graph[ii][jj] = graph[ii][kk] + graph[kk][jj];
+//                 }
+//             }
+//         }
+//     }
+// }
 
 void process_block_lvars(int **graph, int num_vertices, int i, int j, int k) {
-    for (int kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
-        for (int ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
+    int ii, jj, kk;
+    for (kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
+        for (ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
             int ik = graph[ii][kk];
-            for (int jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj++) {
+            for (jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj++) {
                 int sum = ik + graph[kk][jj];
                 if (sum < graph[ii][jj]) {
                     graph[ii][jj] = sum;
@@ -422,10 +453,11 @@ void fw_blocked_unroll4(int **graph, int num_vertices) {
 }
 
 void process_block_unroll4(int **graph, int num_vertices, int i, int j, int k) {
-    for (int kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
-        for (int ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
+    int ii, jj, kk;
+    for (kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
+        for (ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
             int ik = graph[ii][kk];
-            for (int jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj += 4) {
+            for (jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj += 4) {
                 int sum1 = ik + graph[kk][jj];
                 int sum2 = ik + graph[kk][jj + 1];
                 int sum3 = ik + graph[kk][jj + 2];
@@ -508,39 +540,40 @@ void fw_blocked_unroll4_avx(int **graph, int num_vertices) {
 }
 
 void process_block_unroll4_avx(int **graph, int num_vertices, int i, int j, int k) {
-    for (int kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
-        for (int ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
+    int ii, jj, kk;
+    for (kk = k; kk < k + BLOCK_SIZE && kk < num_vertices; kk++) {
+        for (ii = i; ii < i + BLOCK_SIZE && ii < num_vertices; ii++) {
             __m256i ik = _mm256_set1_epi32(graph[ii][kk]);
-            for (int jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj+= 32) {
+            for (jj = j; jj < j + BLOCK_SIZE && jj < num_vertices; jj+= 16) {
                 __m256i ij1 = _mm256_loadu_si256((__m256i *)&graph[ii][jj]);
                 __m256i kj1 = _mm256_loadu_si256((__m256i *)&graph[kk][jj]);
                 __m256i ij2 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 8]);
                 __m256i kj2 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 8]);
-                __m256i ij3 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 16]);
-                __m256i kj3 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 16]);
-                __m256i ij4 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 24]);    
-                __m256i kj4 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 24]);
+                // __m256i ij3 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 16]);
+                // __m256i kj3 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 16]);
+                // __m256i ij4 = _mm256_loadu_si256((__m256i *)&graph[ii][jj + 24]);    
+                // __m256i kj4 = _mm256_loadu_si256((__m256i *)&graph[kk][jj + 24]);
 
 
                 __m256i sum1 = _mm256_add_epi32(ik, kj1);
                 __m256i sum2 = _mm256_add_epi32(ik, kj2);
-                __m256i sum3 = _mm256_add_epi32(ik, kj3);
-                __m256i sum4 = _mm256_add_epi32(ik, kj4);
+                // __m256i sum3 = _mm256_add_epi32(ik, kj3);
+                // __m256i sum4 = _mm256_add_epi32(ik, kj4);
 
                 __m256i mask1 = _mm256_cmpgt_epi32(ij1, sum1);
                 __m256i mask2 = _mm256_cmpgt_epi32(ij2, sum2);
-                __m256i mask3 = _mm256_cmpgt_epi32(ij3, sum3);
-                __m256i mask4 = _mm256_cmpgt_epi32(ij4, sum4);
+                // __m256i mask3 = _mm256_cmpgt_epi32(ij3, sum3);
+                // __m256i mask4 = _mm256_cmpgt_epi32(ij4, sum4);
 
                 __m256i result1 = _mm256_or_si256(_mm256_and_si256(mask1, sum1),_mm256_andnot_si256(mask1, ij1)); // select between sum and ij based on mask
                 __m256i result2 = _mm256_or_si256(_mm256_and_si256(mask2, sum2), _mm256_andnot_si256(mask2, ij2)); // select between sum and ij based on mask
-                __m256i result3 = _mm256_or_si256(_mm256_and_si256(mask3, sum3), _mm256_andnot_si256(mask3, ij3)); // select between sum and ij based on mask 
-                __m256i result4 = _mm256_or_si256(_mm256_and_si256(mask4, sum4), _mm256_andnot_si256(mask4, ij4)); // select between sum and ij based on mask
+                // __m256i result3 = _mm256_or_si256(_mm256_and_si256(mask3, sum3), _mm256_andnot_si256(mask3, ij3)); // select between sum and ij based on mask 
+                // __m256i result4 = _mm256_or_si256(_mm256_and_si256(mask4, sum4), _mm256_andnot_si256(mask4, ij4)); // select between sum and ij based on mask
                 
                 _mm256_storeu_si256((__m256i *)&graph[ii][jj], result1);
                 _mm256_storeu_si256((__m256i *)&graph[ii][jj + 8], result2);
-                _mm256_storeu_si256((__m256i *)&graph[ii][jj + 16], result3);
-                _mm256_storeu_si256((__m256i *)&graph[ii][jj + 24], result4);
+                // _mm256_storeu_si256((__m256i *)&graph[ii][jj + 16], result3);
+                // _mm256_storeu_si256((__m256i *)&graph[ii][jj + 24], result4);
             }
         }
     }
