@@ -7,7 +7,7 @@ Scalar optimizations for Floyd-Warshall Algorithm
 Time measurement code is borrowed from previous EC527 labs.
 
 --------------------------------------------------------------------------------
-gcc -O1 -mavx2 fw_scalar_optimizations.c -lrt -o fw_scalar_optimizations 
+gcc -O1 -mavx2 fw_scalar_optimizations.c -o fw_scalar_optimizations -lrt
 
 */
 
@@ -197,7 +197,7 @@ int main() {
         }
     }
 
-    printf("\nnum_vertices, baseline, local variables, unroll 2x, unroll 4x, unroll 8x, unroll 4x w/ local vars, blocked, blocked w/ unroll 4x, SIMD w/ SSE, SIMD w/ AVX2, blocked w/ unroll 4x & AVX2 \n");
+    printf("\nnum_vertices, baseline, local variables, unroll 2x, unroll 4x, unroll 8x, blocked, blocked w/ unroll 4x, SIMD w/ SSE, SIMD w/ AVX2, blocked w/ unroll 4x & AVX2 \n");
     for (x = 0; x < NUM_TESTS && (num_vertices = A*x*x + B*x + C, num_vertices <= max_vertices); x++) {
         printf("%d", num_vertices);
         for (OPTION = 0; OPTION < OPTIONS; OPTION++) {
